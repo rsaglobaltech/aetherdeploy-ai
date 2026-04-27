@@ -1,0 +1,532 @@
+# ==============================================================================
+# Generado por AetherDeploy — {{ generated_at }}
+# Proyecto: {{ project_name }} | Entorno: {{ environment }}
+# Proveedor: AWS {{ proposal.region }}
+# NO EDITAR MANUALMENTE — regenerar con: aetherdeploy generate
+# ==============================================================================
+
+terraform {
+  required_version = ">= 1.6"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+
+{% if backend %}
+  backend "s3" {
+    bucket         = "{{ backend.bucket }}"
+    key            = "{{ backend.key }}"
+    region         = "{{ backend.region }}"
+    encrypt        = true
+    dynamodb_table = "{{ backend.dynamodb_table }}"
+  }
+{% endif %}
+}
+
+provider "aws" {
+{% if environment == "feature" %}
+  # Modo LocalStack — mismos recursos, endpoint local
+  region                      = var.aws_region
+  access_key                  = "test"
+  secret_key                  = "test"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+
+  endpoints {
+    s3             = "http://localhost:4566"
+    ecs            = "http://localhost:4566"
+    iam            = "http://localhost:4566"
+    cloudwatch     = "http://localhost:4566"
+    logs           = "http://localhost:4566"
+    secretsmanager = "http://localhost:4566"
+    rds            = "http://localhost:4566"
+    elasticache    = "http://localhost:4566"
+    ec2            = "http://localhost:4566"
+    elbv2          = "http://localhost:4566"
+  }
+{% else %}
+  # Modo producción — endpoints reales de AWS
+  region = var.aws_region
+
+  default_tags {
+    tags = {
+      Project     = var.project_name
+      Environment = var.environment
+      ManagedBy   = "aetherdeploy"
+    }
+  }
+{% endif %}
+}
+
+# ==============================================================================
+# Variables
+# ==============================================================================
+
+variable "aws_region" {
+  description = "AWS region"
+  type        = string
+  default     = "{{ proposal.region }}"
+}
+
+variable "project_name" {
+  description = "Nombre del proyecto"
+  type        = string
+  default     = "{{ project_name }}"
+}
+
+variable "environment" {
+  description = "Entorno de despliegue"
+  type        = string
+  default     = "{{ environment }}"
+}
+
+variable "container_image" {
+  description = "Imagen Docker del contenedor de la aplicación"
+  type        = string
+  default     = "{{ project_name }}:latest"
+}
+
+variable "container_port" {
+  description = "Puerto expuesto por el contenedor"
+  type        = number
+  default     = {{ exposed_port }}
+}
+
+# ==============================================================================
+# Red (VPC)
+# ==============================================================================
+
+{% if has_service("networking") %}
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  name = "${var.project_name}-${var.environment}"
+  cidr = "10.0.0.0/16"
+
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+
+  enable_nat_gateway = true
+  single_nat_gateway = var.environment != "prod"
+
+  # Prevent the module from managing default VPC resources.
+  # aws_default_network_acl management causes "InvalidNetworkAclID.NotFound"
+  # errors in both LocalStack and production when the default NACL already has
+  # rules attached by a previous apply.
+  manage_default_network_acl    = false
+  manage_default_route_table    = false
+  manage_default_security_group = false
+}
+{% endif %}
+
+# ==============================================================================
+# Cómputo
+# ==============================================================================
+
+{% if has_service("compute") and compute_resource == "aws_ecs_cluster" %}
+resource "aws_ecs_cluster" "main" {
+  name = "${var.project_name}-${var.environment}"
+
+  setting {
+    name  = "containerInsights"
+    value = "enabled"
+  }
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = "${var.project_name}-${var.environment}"
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = 256
+  memory                   = 512
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+
+  container_definitions = jsonencode([{
+    name      = var.project_name
+    image     = var.container_image
+    essential = true
+    portMappings = [{
+      containerPort = var.container_port
+      protocol      = "tcp"
+    }]
+    environment = []
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        "awslogs-group"         = "/ecs/${var.project_name}-${var.environment}"
+        "awslogs-region"        = var.aws_region
+        "awslogs-stream-prefix" = "app"
+      }
+    }
+  }])
+}
+
+resource "aws_ecs_service" "app" {
+  name            = "${var.project_name}-${var.environment}"
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = var.environment == "prod" ? 2 : 1
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets         = module.vpc.private_subnets
+    security_groups = [aws_security_group.app.id]
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = var.project_name
+    container_port   = var.container_port
+  }
+
+  depends_on = [aws_lb_listener.http]
+}
+
+resource "aws_security_group" "app" {
+  name   = "${var.project_name}-${var.environment}-app"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    from_port       = var.container_port
+    to_port         = var.container_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_cloudwatch_log_group" "app" {
+  name              = "/ecs/${var.project_name}-${var.environment}"
+  retention_in_days = var.environment == "prod" ? 30 : 7
+}
+
+# ALB
+resource "aws_security_group" "alb" {
+  name   = "${var.project_name}-${var.environment}-alb"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+}
+
+resource "aws_lb" "main" {
+  name                       = "${var.project_name}-${var.environment}"
+  internal                   = false
+  load_balancer_type         = "application"
+  security_groups            = [aws_security_group.alb.id]
+  subnets                    = module.vpc.public_subnets
+  enable_deletion_protection = var.environment == "prod"
+  drop_invalid_header_fields = true
+}
+
+resource "aws_lb_target_group" "app" {
+  name                 = "${var.project_name}-${var.environment}"
+  port                 = var.container_port
+  protocol             = "HTTP"
+  vpc_id               = module.vpc.vpc_id
+  target_type          = "ip"
+  deregistration_delay = 30
+
+  health_check {
+    path                = "/actuator/health"
+    matcher             = "200-299"
+    healthy_threshold   = 2
+    unhealthy_threshold = 3
+    interval            = 30
+    timeout             = 5
+  }
+
+  stickiness {
+    type    = "lb_cookie"
+    enabled = false
+  }
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  # En prod redirigir a HTTPS; en otros entornos pasar tráfico directamente
+  dynamic "default_action" {
+    for_each = var.environment == "prod" ? [1] : []
+    content {
+      type = "redirect"
+      redirect {
+        port        = "443"
+        protocol    = "HTTPS"
+        status_code = "HTTP_301"
+      }
+    }
+  }
+
+  dynamic "default_action" {
+    for_each = var.environment != "prod" ? [1] : []
+    content {
+      type             = "forward"
+      target_group_arn = aws_lb_target_group.app.arn
+    }
+  }
+}
+
+# IAM
+resource "aws_iam_role" "ecs_task_execution" {
+  name = "${var.project_name}-${var.environment}-ecs-execution"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "ecs-tasks.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "ecs_task_execution" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
+}
+
+# ==============================================================================
+# Auto Scaling (ECS Fargate)
+# ==============================================================================
+
+resource "aws_appautoscaling_target" "ecs" {
+  max_capacity       = var.environment == "prod" ? 10 : 3
+  min_capacity       = var.environment == "prod" ? 2 : 1
+  resource_id        = "service/${aws_ecs_cluster.main.name}/${aws_ecs_service.app.name}"
+  scalable_dimension = "ecs:service:DesiredCount"
+  service_namespace  = "ecs"
+  depends_on         = [aws_ecs_service.app]
+}
+
+resource "aws_appautoscaling_policy" "cpu" {
+  name               = "${var.project_name}-${var.environment}-cpu"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs.resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = 70.0
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_appautoscaling_policy" "memory" {
+  name               = "${var.project_name}-${var.environment}-memory"
+  policy_type        = "TargetTrackingScaling"
+  resource_id        = aws_appautoscaling_target.ecs.resource_id
+  scalable_dimension = aws_appautoscaling_target.ecs.scalable_dimension
+  service_namespace  = aws_appautoscaling_target.ecs.service_namespace
+
+  target_tracking_scaling_policy_configuration {
+    target_value       = 80.0
+    scale_in_cooldown  = 300
+    scale_out_cooldown = 60
+    predefined_metric_specification {
+      predefined_metric_type = "ECSServiceAverageMemoryUtilization"
+    }
+  }
+}
+{% endif %}
+
+{% if has_service("compute") and compute_resource == "aws_lambda_function" %}
+resource "aws_lambda_function" "app" {
+  function_name = "${var.project_name}-${var.environment}"
+  role          = aws_iam_role.lambda.arn
+  package_type  = "Image"
+  image_uri     = var.container_image
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+    }
+  }
+}
+
+resource "aws_apigatewayv2_api" "main" {
+  name          = "${var.project_name}-${var.environment}"
+  protocol_type = "HTTP"
+  target        = aws_lambda_function.app.invoke_arn
+}
+
+resource "aws_iam_role" "lambda" {
+  name = "${var.project_name}-${var.environment}-lambda"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+    }]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+{% endif %}
+
+# ==============================================================================
+# Base de datos
+# ==============================================================================
+
+{% if has_service("database") %}
+resource "aws_rds_cluster" "main" {
+  cluster_identifier  = "${var.project_name}-${var.environment}"
+  engine              = "aurora-postgresql"
+  engine_mode         = "provisioned"
+  engine_version      = "15.4"
+  database_name       = replace(var.project_name, "-", "_")
+  master_username     = "admin"
+  master_password     = random_password.db.result
+  skip_final_snapshot = var.environment != "prod"
+
+  serverlessv2_scaling_configuration {
+    min_capacity = 0.5
+    max_capacity = var.environment == "prod" ? 16 : 4
+  }
+
+  vpc_security_group_ids = [aws_security_group.db.id]
+  db_subnet_group_name   = aws_db_subnet_group.main.name
+}
+
+resource "aws_rds_cluster_instance" "main" {
+  cluster_identifier = aws_rds_cluster.main.id
+  instance_class     = "db.serverless"
+  engine             = aws_rds_cluster.main.engine
+  engine_version     = aws_rds_cluster.main.engine_version
+}
+
+resource "aws_db_subnet_group" "main" {
+  name       = "${var.project_name}-${var.environment}"
+  subnet_ids = module.vpc.private_subnets
+}
+
+resource "aws_security_group" "db" {
+  name   = "${var.project_name}-${var.environment}-db"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    from_port       = 5432
+    to_port         = 5432
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app.id]
+  }
+}
+
+resource "random_password" "db" {
+  length  = 32
+  special = false
+}
+
+resource "aws_secretsmanager_secret" "db_password" {
+  name = "${var.project_name}/${var.environment}/db-password"
+}
+
+resource "aws_secretsmanager_secret_version" "db_password" {
+  secret_id     = aws_secretsmanager_secret.db_password.id
+  secret_string = random_password.db.result
+}
+{% endif %}
+
+# ==============================================================================
+# Cache
+# ==============================================================================
+
+{% if has_service("cache") %}
+resource "aws_elasticache_subnet_group" "main" {
+  name       = "${var.project_name}-${var.environment}"
+  subnet_ids = module.vpc.private_subnets
+}
+
+resource "aws_elasticache_cluster" "main" {
+  cluster_id           = "${var.project_name}-${var.environment}"
+  engine               = "redis"
+  node_type            = "cache.t4g.micro"
+  num_cache_nodes      = 1
+  parameter_group_name = "default.redis7"
+  subnet_group_name    = aws_elasticache_subnet_group.main.name
+  security_group_ids   = [aws_security_group.cache.id]
+}
+
+resource "aws_security_group" "cache" {
+  name   = "${var.project_name}-${var.environment}-cache"
+  vpc_id = module.vpc.vpc_id
+
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.app.id]
+  }
+}
+{% endif %}
+
+# ==============================================================================
+# Outputs
+# ==============================================================================
+
+{% if has_service("compute") and compute_resource == "aws_ecs_cluster" %}
+output "app_url" {
+  description = "URL de la aplicación"
+  value       = "http://${aws_lb.main.dns_name}"
+}
+
+output "ecs_cluster_name" {
+  description = "Nombre del cluster ECS"
+  value       = aws_ecs_cluster.main.name
+}
+{% endif %}
+
+{% if has_service("compute") and compute_resource == "aws_lambda_function" %}
+output "app_url" {
+  description = "URL de la API Gateway"
+  value       = aws_apigatewayv2_api.main.api_endpoint
+}
+{% endif %}
+
+{% if has_service("database") %}
+output "db_endpoint" {
+  description = "Endpoint de la base de datos"
+  value       = aws_rds_cluster.main.endpoint
+  sensitive   = true
+}
+{% endif %}

@@ -1,0 +1,149 @@
+# ==============================================================================
+# Generado por AetherDeploy — {{ generated_at }}
+# Proyecto: {{ project_name }} | Entorno: {{ environment }} | Proveedor: GCP
+# ==============================================================================
+
+terraform {
+  required_version = ">= 1.6"
+  required_providers {
+    google = {
+      source  = "hashicorp/google"
+      version = "~> 5.0"
+    }
+  }
+{% if backend %}
+  backend "gcs" {
+    bucket = "{{ backend.bucket }}"
+    prefix = "{{ backend.prefix }}"
+  }
+{% endif %}
+}
+
+provider "google" {
+  region  = var.gcp_region
+  project = var.gcp_project_id
+}
+
+variable "gcp_region"     { default = "{{ proposal.region }}" }
+variable "gcp_project_id" { default = "{{ gcp_project_id | default('your-project-id') }}" }
+variable "project_name"   { default = "{{ project_name }}" }
+variable "environment"    { default = "{{ environment }}" }
+variable "container_image" { default = "gcr.io/{{ gcp_project_id | default('your-project-id') }}/{{ project_name }}:latest" }
+variable "container_port"  { default = {{ exposed_port }} }
+
+{% if has_service("compute") and compute_resource == "google_cloud_run_service" %}
+resource "google_cloud_run_service" "app" {
+  name     = "${var.project_name}-${var.environment}"
+  location = var.gcp_region
+
+  template {
+    spec {
+      containers {
+        image = var.container_image
+        ports { container_port = var.container_port }
+        resources {
+          limits = {
+            cpu    = var.environment == "prod" ? "2000m" : "1000m"
+            memory = var.environment == "prod" ? "1Gi" : "512Mi"
+          }
+        }
+        liveness_probe {
+          http_get {
+            path = "/actuator/health"
+          }
+          initial_delay_seconds = 30
+          period_seconds        = 15
+          failure_threshold     = 3
+        }
+        startup_probe {
+          http_get {
+            path = "/actuator/health"
+          }
+          initial_delay_seconds = 10
+          period_seconds        = 10
+          failure_threshold     = 12
+        }
+      }
+      timeout_seconds      = 300
+      service_account_name = google_service_account.app.email
+    }
+    metadata {
+      annotations = {
+        "autoscaling.knative.dev/maxScale"        = var.environment == "prod" ? "20" : "5"
+        "autoscaling.knative.dev/minScale"        = var.environment == "prod" ? "1" : "0"
+        "autoscaling.knative.dev/target"          = "80"
+        "run.googleapis.com/cpu-throttling"       = var.environment == "prod" ? "false" : "true"
+        "run.googleapis.com/startup-cpu-boost"    = "true"
+        {% if has_service("database") %}"run.googleapis.com/vpc-access-connector" = google_vpc_access_connector.main.name
+        "run.googleapis.com/vpc-access-egress"   = "private-ranges-only"{% endif %}
+      }
+    }
+  }
+
+  traffic { percent = 100, latest_revision = true }
+
+  depends_on = [google_project_service.run]
+}
+
+resource "google_cloud_run_service_iam_member" "public" {
+  service  = google_cloud_run_service.app.name
+  location = var.gcp_region
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}
+
+resource "google_service_account" "app" {
+  account_id   = "${var.project_name}-${var.environment}-sa"
+  display_name = "${var.project_name} ${var.environment} service account"
+}
+
+resource "google_project_service" "run" {
+  service            = "run.googleapis.com"
+  disable_on_destroy = false
+}
+
+output "app_url" {
+  value = google_cloud_run_service.app.status[0].url
+}
+{% endif %}
+
+{% if has_service("database") %}
+# VPC Connector — permite a Cloud Run acceder a Cloud SQL de forma privada
+resource "google_vpc_access_connector" "main" {
+  name          = "${var.project_name}-${var.environment}"
+  region        = var.gcp_region
+  ip_cidr_range = "10.8.0.0/28"
+  network       = "default"
+  machine_type  = "e2-micro"
+  min_instances = 2
+  max_instances = var.environment == "prod" ? 10 : 3
+}
+
+resource "google_project_service" "vpcaccess" {
+  service            = "vpcaccess.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_sql_database_instance" "main" {
+  name             = "${var.project_name}-${var.environment}"
+  database_version = "POSTGRES_15"
+  region           = var.gcp_region
+  deletion_protection = var.environment == "prod"
+
+  settings {
+    tier = var.environment == "prod" ? "db-g1-small" : "db-f1-micro"
+    backup_configuration { enabled = true }
+    ip_configuration { ipv4_enabled = false }
+  }
+}
+
+resource "google_sql_database" "app" {
+  name     = replace(var.project_name, "-", "_")
+  instance = google_sql_database_instance.main.name
+}
+
+output "db_connection_name" {
+  value     = google_sql_database_instance.main.connection_name
+  sensitive = true
+}
+{% endif %}

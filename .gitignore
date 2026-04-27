@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# AetherDeploy generated output
+.aetherdeploy/
+
+# Env
+.env
+.env.local
+
+# Node
+cli-ui/node_modules/
+cli-ui/dist/
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+.terraform/
+
+# OS
+.DS_Store

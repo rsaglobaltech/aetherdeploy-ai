@@ -1,0 +1,159 @@
+# ==============================================================================
+# Generado por AetherDeploy — {{ generated_at }}
+# Proyecto: {{ project_name }} | Entorno: {{ environment }} | Proveedor: Azure
+# ==============================================================================
+
+terraform {
+  required_version = ">= 1.6"
+  required_providers {
+    azurerm = { source = "hashicorp/azurerm", version = "~> 3.0" }
+    random  = { source = "hashicorp/random", version = "~> 3.0" }
+  }
+{% if backend %}
+  backend "azurerm" {
+    resource_group_name  = "{{ backend.resource_group_name }}"
+    storage_account_name = "{{ backend.storage_account_name }}"
+    container_name       = "{{ backend.container_name }}"
+    key                  = "{{ backend.key }}"
+  }
+{% endif %}
+}
+
+provider "azurerm" { features {} }
+
+variable "location"        { default = "{{ proposal.region }}" }
+variable "project_name"    { default = "{{ project_name }}" }
+variable "environment"     { default = "{{ environment }}" }
+variable "container_image" { default = "{{ project_name }}:latest" }
+variable "container_port"  { default = {{ exposed_port }} }
+
+resource "azurerm_resource_group" "main" {
+  name     = "${var.project_name}-${var.environment}-rg"
+  location = var.location
+  tags     = { Environment = var.environment, ManagedBy = "aetherdeploy" }
+}
+
+{% if has_service("compute") and compute_resource == "azurerm_container_app" %}
+resource "azurerm_log_analytics_workspace" "main" {
+  name                = "${var.project_name}-${var.environment}-logs"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  sku                 = "PerGB2018"
+  retention_in_days   = var.environment == "prod" ? 30 : 7
+}
+
+resource "azurerm_container_app_environment" "main" {
+  name                       = "${var.project_name}-${var.environment}"
+  location                   = azurerm_resource_group.main.location
+  resource_group_name        = azurerm_resource_group.main.name
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+}
+
+resource "azurerm_container_app" "app" {
+  name                         = "${var.project_name}-${var.environment}"
+  container_app_environment_id = azurerm_container_app_environment.main.id
+  resource_group_name          = azurerm_resource_group.main.name
+  revision_mode                = "Single"
+
+  template {
+    container {
+      name   = var.project_name
+      image  = var.container_image
+      cpu    = var.environment == "prod" ? 0.5 : 0.25
+      memory = var.environment == "prod" ? "1Gi" : "0.5Gi"
+
+      liveness_probe {
+        transport = "HTTP"
+        path      = "/actuator/health"
+        port      = var.container_port
+        initial_delay = 30
+        period_seconds = 15
+        failure_count_threshold = 3
+      }
+      readiness_probe {
+        transport = "HTTP"
+        path      = "/actuator/health"
+        port      = var.container_port
+        initial_delay = 10
+        period_seconds = 10
+        failure_count_threshold = 5
+      }
+    }
+    min_replicas = var.environment == "prod" ? 1 : 0
+    max_replicas = var.environment == "prod" ? 20 : 5
+
+    # Escalar por carga HTTP (equivalente al ALB target tracking en AWS)
+    custom_scale_rule {
+      name             = "http-scaling"
+      custom_rule_type = "http"
+      metadata = {
+        concurrentRequests = var.environment == "prod" ? "50" : "30"
+      }
+    }
+  }
+
+  ingress {
+    external_enabled            = true
+    target_port                 = var.container_port
+    allow_insecure_connections  = var.environment != "prod"
+    traffic_weight { percentage = 100, latest_revision = true }
+  }
+}
+
+output "app_url" {
+  value = "https://${azurerm_container_app.app.latest_revision_fqdn}"
+}
+{% endif %}
+
+{% if has_service("database") %}
+resource "azurerm_key_vault" "main" {
+  name                = "${var.project_name}-${var.environment}-kv"
+  location            = azurerm_resource_group.main.location
+  resource_group_name = azurerm_resource_group.main.name
+  tenant_id           = data.azurerm_client_config.current.tenant_id
+  sku_name            = "standard"
+  purge_protection_enabled   = var.environment == "prod"
+  soft_delete_retention_days = var.environment == "prod" ? 90 : 7
+}
+
+data "azurerm_client_config" "current" {}
+
+resource "azurerm_key_vault_access_policy" "terraform" {
+  key_vault_id = azurerm_key_vault.main.id
+  tenant_id    = data.azurerm_client_config.current.tenant_id
+  object_id    = data.azurerm_client_config.current.object_id
+  secret_permissions = ["Get", "Set", "Delete", "List", "Purge"]
+}
+
+resource "random_password" "db" { length = 24, special = false }
+
+resource "azurerm_key_vault_secret" "db_password" {
+  name         = "db-password"
+  value        = random_password.db.result
+  key_vault_id = azurerm_key_vault.main.id
+  depends_on   = [azurerm_key_vault_access_policy.terraform]
+}
+
+resource "azurerm_postgresql_flexible_server" "main" {
+  name                   = "${var.project_name}-${var.environment}-db"
+  resource_group_name    = azurerm_resource_group.main.name
+  location               = azurerm_resource_group.main.location
+  version                = "15"
+  administrator_login    = "adminuser"
+  administrator_password = random_password.db.result
+  sku_name               = var.environment == "prod" ? "GP_Standard_D2s_v3" : "B_Standard_B1ms"
+  storage_mb             = 32768
+  backup_retention_days  = var.environment == "prod" ? 35 : 7
+  geo_redundant_backup_enabled = var.environment == "prod"
+}
+
+resource "azurerm_postgresql_flexible_server_database" "app" {
+  name      = replace(var.project_name, "-", "_")
+  server_id = azurerm_postgresql_flexible_server.main.id
+}
+
+output "db_fqdn" {
+  value     = azurerm_postgresql_flexible_server.main.fqdn
+  sensitive = true
+}
+{% endif %}
