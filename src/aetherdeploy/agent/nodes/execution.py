@@ -12,6 +12,7 @@ from ...models import DeploymentResult
 from ...terraform.runner import TerraformRunner
 from ..context import _emitter_var  # noqa: F401 — re-exported for backward compat
 from ..state import AetherState
+from .health import check_endpoints
 
 _composer = DockerComposer()
 _docker = DockerRunner()
@@ -139,7 +140,7 @@ async def execution_node(state: AetherState) -> dict:
         elif env == "feature":
             result = await _deploy_feature(project_path, analysis, proposal)
         else:
-            result = await _deploy_prod(project_path, proposal, env)
+            result = await _deploy_prod(project_path, analysis, proposal, env)
 
         env_results[env] = result
         all_endpoints.extend(result.get("endpoints", []))
@@ -545,16 +546,29 @@ async def _deploy_feature(project_path: Path, analysis, proposal) -> dict:
     if not apply.ok:
         return {"success": False, "error": _extract_tf_error(apply.stderr or apply.stdout), "endpoints": local_endpoints}
 
-    emit({"type": "progress", "step": "feature_done", "percentage": 100})
     output = _terraform.output(tf_dir)
     tf_endpoints = _extract_endpoints(output.stdout)
     all_endpoints = local_endpoints + tf_endpoints
+
+    health = await _run_health_checks(all_endpoints, analysis, "feature")
+    emit({"type": "progress", "step": "feature_done", "percentage": 100})
+
+    if not health.ok:
+        return {
+            "success": False,
+            "error": f"Post-deploy health checks failed:\n{health.summary()}",
+            "endpoints": all_endpoints,
+            "localstack": True,
+            "compose_file": str(compose_file),
+            "health": _health_to_dict(health),
+        }
 
     return {
         "success": True,
         "endpoints": all_endpoints,
         "localstack": True,
         "compose_file": str(compose_file),
+        "health": _health_to_dict(health),
     }
 
 
@@ -583,7 +597,7 @@ def _is_localstack_healthy(project_path: Path) -> bool:
     return result.ok
 
 
-async def _deploy_prod(project_path: Path, proposal, env: str) -> dict:
+async def _deploy_prod(project_path: Path, analysis, proposal, env: str) -> dict:
     """Deploys with Terraform to the specified environment."""
     emit = _emitter_var.get()
     tf_dir = project_path / ".aetherdeploy" / "terraform" / env
@@ -618,8 +632,21 @@ async def _deploy_prod(project_path: Path, proposal, env: str) -> dict:
     emit({"type": "progress", "step": "tf_output", "percentage": 98})
     output = _terraform.output(tf_dir)
     endpoints = _extract_endpoints(output.stdout)
+
+    health = await _run_health_checks(endpoints, analysis, env)
     emit({"type": "progress", "step": "prod_done", "percentage": 100})
-    return {"success": True, "endpoints": endpoints}
+    if not health.ok:
+        return {
+            "success": False,
+            "error": f"Post-deploy health checks failed:\n{health.summary()}",
+            "endpoints": endpoints,
+            "health": _health_to_dict(health),
+        }
+    return {
+        "success": True,
+        "endpoints": endpoints,
+        "health": _health_to_dict(health),
+    }
 
 
 async def _terraform_plan_env(project_path: Path, proposal, env: str) -> dict:
@@ -699,6 +726,67 @@ def _extract_endpoints(terraform_output: str) -> list[str]:
         return [u for u in urls if u]
     except (json.JSONDecodeError, AttributeError):
         return []
+
+
+# ---------------------------------------------------------------------------
+# Health checks (MEJORAS.md §2.4)
+# ---------------------------------------------------------------------------
+
+def _health_timeout_for_env(env: str) -> float:
+    override = os.environ.get("AETHER_HEALTHCHECK_TIMEOUT_S")
+    if override:
+        try:
+            return max(1.0, float(override))
+        except ValueError:
+            pass
+    return 30.0 if env == "feature" else 180.0
+
+
+async def _run_health_checks(endpoints: list[str], analysis, env: str):
+    """Polls deployment endpoints and reports the result through the emitter."""
+    emit = _emitter_var.get()
+    if os.environ.get("AETHER_HEALTHCHECK_DISABLED") == "1":
+        from .health import HealthReport
+        emit({"type": "message", "role": "assistant", "content": "Skipping post-deploy health checks (AETHER_HEALTHCHECK_DISABLED=1)."})
+        return HealthReport()
+
+    if not endpoints:
+        from .health import HealthReport
+        return HealthReport()
+
+    emit({"type": "progress", "step": f"{env}_healthcheck", "percentage": 95})
+    emit({
+        "type": "message",
+        "role": "assistant",
+        "content": f"Probing {len(endpoints)} endpoint(s) for readiness...",
+    })
+
+    report = await check_endpoints(
+        endpoints,
+        analysis=analysis,
+        timeout_s=_health_timeout_for_env(env),
+    )
+
+    if report.any_probed:
+        emit({"type": "message", "role": "assistant", "content": report.summary()})
+    return report
+
+
+def _health_to_dict(report) -> dict:
+    return {
+        "ok": report.ok,
+        "checks": [
+            {
+                "url": c.url,
+                "status": c.status,
+                "http_status": c.http_status,
+                "latency_ms": c.latency_ms,
+                "attempts": c.attempts,
+                "error": c.error,
+            }
+            for c in report.checks
+        ],
+    }
 
 
 def _extract_tf_error(raw: str) -> str:
