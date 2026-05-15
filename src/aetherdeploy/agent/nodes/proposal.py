@@ -27,7 +27,7 @@ import re
 
 from ...config import get_config
 from ...llm.base import LLMBackendFactory
-from ...models import ArchitectureProposal, ServiceRecommendation
+from ...models import ArchitectureProposal, Decision, ServiceRecommendation
 from ...observability import log_event
 from ...providers import get_provider
 from ...providers.aws.services import SERVICE_ALTERNATIVES
@@ -88,6 +88,10 @@ async def proposal_node(state: AetherState) -> dict:
 
     summary = _format_proposal_summary(provider_name, proposal, analysis, envs)
 
+    # Populate the decision graph from the final proposal + signals/catalog.
+    # Additive — does not change selection, only annotates "why" per service.
+    proposal.decisions = _build_decisions(proposal, analysis, provider_name)
+
     assistant_messages = [
         *([{"role": "assistant", "content": llm_status}] if llm_status else []),
         *([{"role": "assistant", "content": optimization_summary}] if optimization_summary else []),
@@ -99,6 +103,76 @@ async def proposal_node(state: AetherState) -> dict:
         "current_step": "proposal_ready",
         "messages": [*state.get("messages", []), *assistant_messages],
     }
+
+
+def _build_decisions(
+    proposal: ArchitectureProposal,
+    analysis,
+    provider_name: str,
+) -> list[Decision]:
+    """Derive Decision records from the final proposal + alternatives catalog.
+
+    MEJORAS.md §17.1. For each chosen service we record:
+      * which alternatives existed in the catalog,
+      * their normalized cost score,
+      * which hints excluded an alternative (if any),
+      * the project signals that informed the choice.
+
+    Only AWS has a populated ``SERVICE_ALTERNATIVES`` catalog today
+    (MEJORAS.md §4.1 calls for GCP/Azure parity). For other providers we still
+    emit a minimal Decision so the explain output stays consistent.
+    """
+    hints = list(getattr(analysis, "infrastructure_hints", []) or [])
+    catalog = SERVICE_ALTERNATIVES if provider_name == "aws" else {}
+    decisions: list[Decision] = []
+
+    for svc in proposal.services:
+        purpose = svc.purpose
+        alternatives = catalog.get(purpose, [])
+        if not alternatives:
+            decisions.append(
+                Decision(
+                    purpose=purpose,
+                    chosen_service=svc.service_name,
+                    signals_used=hints[:6],
+                    confidence=0.7,
+                )
+            )
+            continue
+
+        # Normalize alternatives by cost_high (lower = better score).
+        max_cost = max((alt["cost_high"] for alt in alternatives), default=1) or 1
+        considered: list[tuple[str, float, str]] = []
+        chosen_score = 1.0
+        for alt in alternatives:
+            score = alt["cost_high"] / max_cost
+            excluded_by = [h for h in alt.get("excludes", []) if h in hints]
+            required_missing = [r for r in alt.get("requires", []) if r not in hints]
+            if alt["service"] == svc.service_name.split(" (")[0]:
+                chosen_score = score
+                continue  # the chosen one is not listed as an "alternative considered"
+            reason: str
+            if excluded_by:
+                reason = f"excluded by hints {excluded_by}"
+            elif required_missing:
+                reason = f"requires missing signals {required_missing}"
+            elif score > chosen_score:
+                reason = "more expensive than the chosen option"
+            else:
+                reason = "valid candidate, not selected by optimizer"
+            considered.append((alt["service"], score, reason))
+
+        decisions.append(
+            Decision(
+                purpose=purpose,
+                chosen_service=svc.service_name,
+                alternatives_considered=considered,
+                signals_used=hints[:6],
+                constraints_applied=[h for h in hints if h.startswith("requires-") or h in ("gdpr-eu", "hipaa", "pci")],
+                confidence=max(0.55, 1.0 - chosen_score / 2),
+            )
+        )
+    return decisions
 
 
 # ---------------------------------------------------------------------------

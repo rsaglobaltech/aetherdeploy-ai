@@ -52,6 +52,42 @@ class EnvironmentConfig:
 
 
 @dataclass
+class Decision:
+    """Why a particular service was chosen for a given purpose.
+
+    Attached to ``ArchitectureProposal.decisions``. Powers the ``--explain``
+    output and the auditable Architecture Decision Records described in
+    MEJORAS.md §6.1 and §17.1.
+
+    Fields
+    ------
+    purpose:
+        The purpose slot in the proposal (e.g. ``"compute"``, ``"database"``).
+    chosen_service:
+        Human-readable name of the selected service.
+    alternatives_considered:
+        Tuples of ``(service_name, score, reason)``. ``score`` is the
+        normalized cost score the optimizer used (0.0 = cheapest);
+        ``reason`` explains why the alternative was excluded or not picked.
+    signals_used:
+        Project / workload signals that drove the selection (e.g.
+        ``"rps_observed=45"`` or ``"uses-websockets"``).
+    constraints_applied:
+        Hard constraints that limited the candidate set (compliance,
+        region availability, SLO factibility).
+    confidence:
+        ``0.0–1.0`` — how confident the engine is in this choice. The CLI
+        can gate ``--yolo`` mode on this (MEJORAS.md §17.2).
+    """
+    purpose: str
+    chosen_service: str
+    alternatives_considered: list[tuple[str, float, str]] = field(default_factory=list)
+    signals_used: list[str] = field(default_factory=list)
+    constraints_applied: list[str] = field(default_factory=list)
+    confidence: float = 1.0
+
+
+@dataclass
 class ArchitectureProposal:
     provider: str
     region: str
@@ -63,6 +99,7 @@ class ArchitectureProposal:
     # New optional fields — None keeps all existing construction sites working
     metadata: ProposalMetadata | None = None
     cloud_mappings: dict[str, str] = field(default_factory=dict)
+    decisions: list[Decision] = field(default_factory=list)
 
 
 @dataclass

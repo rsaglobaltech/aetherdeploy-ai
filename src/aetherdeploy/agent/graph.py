@@ -19,6 +19,7 @@ from langgraph.graph import END, StateGraph
 from ..models import (
     ApplicationTopology,
     ArchitectureProposal,
+    Decision,
     DeploymentResult,
     EnvironmentConfig,
     LanguageAnalysis,
@@ -36,6 +37,7 @@ _SERDE = JsonPlusSerializer(
     allowed_msgpack_modules=[
         ApplicationTopology,
         ArchitectureProposal,
+        Decision,
         DeploymentResult,
         EnvironmentConfig,
         LanguageAnalysis,

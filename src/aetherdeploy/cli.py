@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Optional
-from uuid import uuid4
+from uuid import uuid4  # noqa: F401  (used by callers below)
 
 import typer
 from rich.console import Console
@@ -165,6 +165,47 @@ def doctor(
     else:
         console.print("[green bold]All checks passed.[/green bold]")
     raise typer.Exit(report.exit_code)
+
+
+@app.command()
+def explain(
+    thread_id: Optional[str] = typer.Argument(None, help="Thread ID from a persisted run; omit to read the most recent."),
+    output: str = typer.Option("markdown", "--output", "-o", help="Output format: markdown | text"),
+    save: Optional[Path] = typer.Option(None, "--save", help="Write the ADR markdown to this path."),
+):
+    """Render the decision graph (ADR) for a persisted proposal."""
+    from .cli_history import list_threads
+    from .agent.graph import _ENV_PERSIST_PATH, build_graph, default_checkpoint_path
+    from .explain import render_markdown, render_text
+
+    db = default_checkpoint_path()
+    if not db.exists():
+        console.print(
+            "[yellow]No persisted threads found. Run `aetherdeploy deploy --persist ...` first.[/yellow]"
+        )
+        raise typer.Exit(1)
+    os.environ[_ENV_PERSIST_PATH] = str(db)
+
+    if thread_id is None:
+        records = list_threads(limit=1)
+        if not records:
+            console.print("[yellow]Checkpoint DB is empty.[/yellow]")
+            raise typer.Exit(1)
+        thread_id = records[0].thread_id
+
+    graph = build_graph()
+    snapshot = graph.get_state({"configurable": {"thread_id": thread_id}})
+    proposal = snapshot.values.get("architecture_proposal") if snapshot else None
+    if proposal is None:
+        console.print(f"[red]No proposal stored for thread '{thread_id}'.[/red]")
+        raise typer.Exit(1)
+
+    rendered = render_markdown(proposal) if output == "markdown" else render_text(proposal)
+    if save:
+        save.write_text(rendered, encoding="utf-8")
+        console.print(f"[green]Wrote {save}[/green]")
+    else:
+        console.print(rendered)
 
 
 @app.command()
