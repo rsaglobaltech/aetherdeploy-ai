@@ -48,6 +48,9 @@ class AetherState(TypedDict, total=False):
     # Resultado de policy gates (MEJORAS.md §3.2) — por entorno
     policy_results: dict[str, dict]
 
+    # Bootstrap del backend remoto Terraform (MEJORAS.md §1.1) — por entorno
+    state_backends: dict[str, dict]
+
     # Ejecución
     deployment_result: DeploymentResult | None
 

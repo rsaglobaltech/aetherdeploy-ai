@@ -22,6 +22,9 @@ class AetherConfig(BaseSettings):
     default_region: str = "us-east-1"
     terraform_binary: str = "terraform"
 
+    # State backend (MEJORAS.md §1.1) — "remote" requires cloud creds at apply time
+    state_backend: Literal["remote", "local"] = "remote"
+
     # Observabilidad
     otel_enabled: bool = False
     otel_endpoint: str = "http://localhost:4317"
