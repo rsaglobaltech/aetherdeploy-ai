@@ -42,6 +42,9 @@ class AetherState(TypedDict, total=False):
     terraform_configs: dict[str, str]
     docker_compose: str | None
 
+    # Build de imagen (MEJORAS.md §2.1) — por entorno
+    image_builds: dict[str, dict]
+
     # Ejecución
     deployment_result: DeploymentResult | None
 

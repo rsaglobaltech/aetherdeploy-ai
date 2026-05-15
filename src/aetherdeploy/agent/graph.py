@@ -50,6 +50,7 @@ _SERDE = JsonPlusSerializer(
 
 from .nodes import (
     analysis_node,
+    build_node,
     confirmation_node,
     discovery_node,
     execution_node,
@@ -79,6 +80,13 @@ def _route_after_confirmation(state: AetherState) -> Literal["generation", "prop
     if step == "needs_revision":
         return "proposal"
     return "__end__"
+
+
+def _route_after_build(state: AetherState) -> Literal["execution", "__end__"]:
+    """Halt the pipeline if the image build/push failed; otherwise continue to execution."""
+    if state.get("current_step") == "build_error":
+        return "__end__"
+    return "execution"
 
 
 def _route_after_execution(state: AetherState) -> Literal["promotion", "__end__"]:
@@ -152,6 +160,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("proposal", traced_node(proposal_node))
     builder.add_node("confirmation", traced_node(confirmation_node))
     builder.add_node("generation", traced_node(generation_node))
+    builder.add_node("build", traced_node(build_node))
     builder.add_node("execution", traced_node(execution_node))
     builder.add_node("promotion", traced_node(promotion_node))
 
@@ -175,7 +184,12 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
         {"generation": "generation", "proposal": "proposal", "__end__": END},
     )
 
-    builder.add_edge("generation", "execution")
+    builder.add_edge("generation", "build")
+    builder.add_conditional_edges(
+        "build",
+        _route_after_build,
+        {"execution": "execution", "__end__": END},
+    )
 
     builder.add_conditional_edges(
         "execution",

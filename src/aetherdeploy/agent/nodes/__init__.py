@@ -3,6 +3,7 @@ from .analysis import analysis_node
 from .proposal import proposal_node
 from .confirmation import confirmation_node
 from .generation import generation_node
+from .build import build_node
 from .execution import execution_node
 from .promotion import promotion_node
 
@@ -12,6 +13,7 @@ __all__ = [
     "proposal_node",
     "confirmation_node",
     "generation_node",
+    "build_node",
     "execution_node",
     "promotion_node",
 ]
