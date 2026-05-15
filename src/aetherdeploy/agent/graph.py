@@ -1,7 +1,17 @@
 from __future__ import annotations
 
+import os
+import sqlite3
+from pathlib import Path
 from typing import Literal
 
+# Env var honored by build_graph() — set by the CLI when --persist is passed.
+# Lets call sites that don't directly construct the checkpointer (legacy paths
+# in cli.py) still get persistence without threading a parameter through every
+# function. Documented in MEJORAS.md §1.2.
+_ENV_PERSIST_PATH = "AETHER_CHECKPOINT_PATH"
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.graph import END, StateGraph
@@ -88,7 +98,31 @@ def _route_after_promotion(state: AetherState) -> Literal["execution", "__end__"
     return "__end__"
 
 
-def build_graph():
+def default_checkpoint_path() -> Path:
+    """Canonical location for the persistent agent checkpoint database."""
+    return Path.home() / ".aetherdeploy" / "agent.sqlite"
+
+
+def make_sqlite_checkpointer(
+    path: Path | str | None = None,
+) -> "BaseCheckpointSaver":
+    """Return a persistent SQLite-backed checkpoint saver.
+
+    Survives across CLI invocations: HIL interrupts can be resumed days later
+    via ``aetherdeploy resume <thread-id>``. See MEJORAS.md §1.2.
+
+    The directory is created on demand. ``check_same_thread=False`` lets the
+    same connection be reused across the async tasks LangGraph spawns.
+    """
+    target = Path(path) if path else default_checkpoint_path()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    conn = sqlite3.connect(str(target), check_same_thread=False)
+    return SqliteSaver(conn, serde=_SERDE)
+
+
+def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     """Construye y compila el grafo LangGraph de AetherDeploy.
 
     El flujo es:
@@ -100,6 +134,14 @@ def build_graph():
     interrupt_before=["confirmation", "promotion"] implementa dos Human-in-the-Loop:
     1. Antes de confirmation: el usuario aprueba la propuesta de arquitectura.
     2. Antes de promotion: el usuario decide si promover de LocalStack a prod real.
+
+    Parameters
+    ----------
+    checkpointer:
+        Optional saver to persist agent state. Defaults to an in-memory saver
+        (state evaporates when the process exits). Pass the result of
+        :func:`make_sqlite_checkpointer` to get a durable SQLite backend that
+        allows resuming sessions across CLI invocations (MEJORAS.md §1.2).
     """
     builder = StateGraph(AetherState)
 
@@ -145,7 +187,12 @@ def build_graph():
         {"execution": "execution", "__end__": END},
     )
 
+    if checkpointer is None:
+        env_path = os.environ.get(_ENV_PERSIST_PATH)
+        if env_path:
+            checkpointer = make_sqlite_checkpointer(env_path)
+    saver = checkpointer if checkpointer is not None else MemorySaver(serde=_SERDE)
     return builder.compile(
-        checkpointer=MemorySaver(serde=_SERDE),
+        checkpointer=saver,
         interrupt_before=["confirmation", "promotion"],
     )

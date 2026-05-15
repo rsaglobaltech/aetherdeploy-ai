@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Awaitable, Callable
 from uuid import uuid4
 
-from .agent.graph import build_graph
+from .agent.graph import build_graph, make_sqlite_checkpointer
 from .agent.state import AetherState
 from .models import ArchitectureProposal, DeploymentResult, ProjectAnalysis
 
@@ -42,12 +43,24 @@ class AetherDeploy:
         region: str | None = None,
         llm_backend: str = "ollama",
         llm_model: str = "gemma3",
+        persist_path: str | Path | None = None,
     ) -> None:
+        """Build an AetherDeploy SDK client.
+
+        Parameters
+        ----------
+        persist_path:
+            If provided, agent state is persisted to a SQLite database at this
+            path. Survives across process restarts — call :meth:`resume` with
+            the saved ``thread_id`` to continue. If ``None`` (default) state is
+            held only in memory and lost when the process exits.
+        """
         self._provider = provider
         self._region = region
         self._llm_backend = llm_backend
         self._llm_model = llm_model
-        self._graph = build_graph()
+        checkpointer = make_sqlite_checkpointer(persist_path) if persist_path else None
+        self._graph = build_graph(checkpointer=checkpointer)
 
     async def deploy(
         self,

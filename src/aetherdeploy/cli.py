@@ -57,9 +57,16 @@ def deploy(
     provider: Optional[str] = typer.Option(None, "--provider", help="Cloud provider (aws/gcp/azure)"),
     env: list[str] = typer.Option(["prod"], "--env", "-e", help="Target environments"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Generate IaC only; do not deploy"),
+    persist: bool = typer.Option(
+        False, "--persist",
+        help="Persist agent state to ~/.aetherdeploy/agent.sqlite so the session can be resumed.",
+    ),
 ):
     """Deploy a project to the cloud using natural language."""
     log_path = setup_logging()
+    if persist:
+        from .agent.graph import _ENV_PERSIST_PATH, default_checkpoint_path
+        os.environ[_ENV_PERSIST_PATH] = str(default_checkpoint_path())
     log_event(
         "cli.deploy.start",
         instruction=instruction,
@@ -67,6 +74,7 @@ def deploy(
         provider=provider,
         environments=env,
         dry_run=dry_run,
+        persist=persist,
         log_file=str(log_path),
     )
     asyncio.run(_deploy_async(instruction, project, provider, env, dry_run))
@@ -157,6 +165,84 @@ def doctor(
     else:
         console.print("[green bold]All checks passed.[/green bold]")
     raise typer.Exit(report.exit_code)
+
+
+@app.command()
+def history(
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text | json"),
+    limit: int = typer.Option(50, "--limit", help="Max entries to show"),
+):
+    """List persisted agent threads from the checkpoint database."""
+    from .cli_history import list_threads
+    try:
+        records = list_threads(limit=limit)
+    except FileNotFoundError as exc:
+        console.print(f"[yellow]{exc}[/yellow]")
+        raise typer.Exit(0)
+
+    if not records:
+        console.print("[dim]No threads recorded yet. Run `aetherdeploy deploy --persist ...` first.[/dim]")
+        raise typer.Exit(0)
+
+    if output == "json":
+        import json as _json
+        from dataclasses import asdict
+        console.print_json(_json.dumps([asdict(r) for r in records]))
+        raise typer.Exit(0)
+
+    from rich.table import Table
+    table = Table(title="Persisted agent threads")
+    table.add_column("thread_id", style="cyan", no_wrap=True)
+    table.add_column("last step")
+    table.add_column("action")
+    table.add_column("project")
+    table.add_column("timestamp", style="dim")
+    for r in records:
+        table.add_row(
+            r.thread_id,
+            r.last_step or "—",
+            r.requested_action or "—",
+            r.project_path or "—",
+            r.last_checkpoint_ts or "—",
+        )
+    console.print(table)
+
+
+@app.command()
+def resume(
+    thread_id: str = typer.Argument(..., help="Thread ID from `aetherdeploy history`"),
+    approve: bool = typer.Option(
+        False, "--approve/--reject",
+        help="Default decision when the resumed thread is paused at a HIL interrupt.",
+    ),
+):
+    """Resume a persisted agent thread that was interrupted at a HIL checkpoint."""
+    from .agent.graph import _ENV_PERSIST_PATH, build_graph, default_checkpoint_path
+    db_path = default_checkpoint_path()
+    if not db_path.exists():
+        console.print(f"[red]No checkpoint database at {db_path}.[/red]")
+        raise typer.Exit(1)
+    os.environ[_ENV_PERSIST_PATH] = str(db_path)
+    graph = build_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+
+    snapshot = graph.get_state(config)
+    if snapshot is None or not snapshot.values:
+        console.print(f"[red]Thread '{thread_id}' not found.[/red]")
+        raise typer.Exit(1)
+    if not snapshot.next:
+        console.print(f"[green]Thread '{thread_id}' is already complete. Nothing to do.[/green]")
+        raise typer.Exit(0)
+
+    console.print(f"Resuming thread [cyan]{thread_id}[/cyan] at node {snapshot.next}…")
+
+    async def _resume_async() -> None:
+        graph.update_state(config, {"user_approved": approve, "user_modifications": None})
+        async for _ in graph.astream(None, config):
+            pass
+
+    asyncio.run(_resume_async())
+    console.print("[green]Resume complete.[/green]")
 
 
 # ---------------------------------------------------------------------------
