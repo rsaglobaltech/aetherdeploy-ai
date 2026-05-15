@@ -55,6 +55,7 @@ from .nodes import (
     discovery_node,
     execution_node,
     generation_node,
+    policy_node,
     promotion_node,
     proposal_node,
 )
@@ -80,6 +81,13 @@ def _route_after_confirmation(state: AetherState) -> Literal["generation", "prop
     if step == "needs_revision":
         return "proposal"
     return "__end__"
+
+
+def _route_after_policy(state: AetherState) -> Literal["build", "__end__"]:
+    """Stop the pipeline when the policy gate blocked the deploy."""
+    if state.get("current_step") == "policy_error":
+        return "__end__"
+    return "build"
 
 
 def _route_after_build(state: AetherState) -> Literal["execution", "__end__"]:
@@ -160,6 +168,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("proposal", traced_node(proposal_node))
     builder.add_node("confirmation", traced_node(confirmation_node))
     builder.add_node("generation", traced_node(generation_node))
+    builder.add_node("policy", traced_node(policy_node))
     builder.add_node("build", traced_node(build_node))
     builder.add_node("execution", traced_node(execution_node))
     builder.add_node("promotion", traced_node(promotion_node))
@@ -184,7 +193,12 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
         {"generation": "generation", "proposal": "proposal", "__end__": END},
     )
 
-    builder.add_edge("generation", "build")
+    builder.add_edge("generation", "policy")
+    builder.add_conditional_edges(
+        "policy",
+        _route_after_policy,
+        {"build": "build", "__end__": END},
+    )
     builder.add_conditional_edges(
         "build",
         _route_after_build,

@@ -45,6 +45,9 @@ class AetherState(TypedDict, total=False):
     # Build de imagen (MEJORAS.md §2.1) — por entorno
     image_builds: dict[str, dict]
 
+    # Resultado de policy gates (MEJORAS.md §3.2) — por entorno
+    policy_results: dict[str, dict]
+
     # Ejecución
     deployment_result: DeploymentResult | None
 
