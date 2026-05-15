@@ -121,6 +121,44 @@ def analyze(
     asyncio.run(_analyze_async(project, output, llm))
 
 
+@app.command()
+def doctor(
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text | json"),
+):
+    """Pre-flight check: Terraform, Docker, LLM backend, cloud credentials."""
+    from .cli_doctor import run_checks
+    from dataclasses import asdict
+
+    report = run_checks()
+    if output == "json":
+        import json as _json
+        payload = {
+            "checks": [asdict(c) for c in report.checks],
+            "exit_code": report.exit_code,
+        }
+        console.print_json(_json.dumps(payload))
+        raise typer.Exit(report.exit_code)
+
+    symbol = {"ok": "[green]✓[/green]", "warn": "[yellow]![/yellow]",
+              "fail": "[red]✗[/red]", "skip": "[dim]-[/dim]"}
+    for c in report.checks:
+        line = f"  {symbol[c.status]}  [bold]{c.name}[/bold]"
+        if c.detail:
+            line += f" — {c.detail}"
+        console.print(line)
+        if c.status in ("warn", "fail") and c.hint:
+            console.print(f"       [dim]hint:[/dim] {c.hint}")
+
+    console.print()
+    if report.exit_code:
+        console.print("[red bold]Some checks failed.[/red bold] Fix the issues above before running `deploy`.")
+    elif report.has_warnings:
+        console.print("[yellow]All required checks passed (with warnings).[/yellow]")
+    else:
+        console.print("[green bold]All checks passed.[/green bold]")
+    raise typer.Exit(report.exit_code)
+
+
 # ---------------------------------------------------------------------------
 # Async implementations
 # ---------------------------------------------------------------------------

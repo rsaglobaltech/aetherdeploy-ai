@@ -11,6 +11,10 @@ to execution_node for the prod environment.
 
 If the user rejects → current_step = "promote_rejected" → the graph ends.
 """
+from __future__ import annotations
+
+from ..state import AetherState
+
 
 async def promotion_node(state: AetherState) -> dict:
     """Processes the promotion decision the user made after the interrupt.

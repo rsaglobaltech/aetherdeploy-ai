@@ -25,5 +25,16 @@ cli-ui/dist/
 *.tfstate.backup
 .terraform/
 
+# Java build output (test fixtures)
+target/
+*.class
+
 # OS
 .DS_Store
+
+# IDE
+.idea/
+*.iml
+
+# LLM response cache (Parte II §15.4 — local-only)
+.aetherdeploy/llm-cache.sqlite
