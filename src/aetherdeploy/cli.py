@@ -168,6 +168,50 @@ def doctor(
 
 
 @app.command()
+def solve(
+    project: str = typer.Option(".", "--project", "-p", help="Path to the project"),
+    provider: str = typer.Option("aws", "--provider", help="Cloud provider (aws only for now)"),
+    region: str = typer.Option("us-east-1", "--region", help="Deployment region"),
+    budget: Optional[int] = typer.Option(None, "--budget", help="Monthly USD budget cap"),
+    p99: Optional[int] = typer.Option(None, "--p99", help="SLO p99 latency in milliseconds"),
+    output: str = typer.Option("text", "--output", "-o", help="Output format: text | markdown | json"),
+):
+    """Run the CP-SAT solver and emit up to 3 Pareto-optimal proposals (MEJORAS.md §13)."""
+    from .analyzers.detector import ProjectDetector
+    from .explain import render_markdown, render_text
+    from .solver_adapter import solve_to_proposals
+    from .workload import SLO, WorkloadFingerprint
+
+    topology = ProjectDetector().detect_topology(Path(project).resolve())
+    fingerprint = WorkloadFingerprint.from_topology(topology)
+    if budget:
+        fingerprint.budget_usd_month = budget
+    if p99:
+        fingerprint.slo = SLO(p99_latency_ms=p99)
+
+    proposals = solve_to_proposals(fingerprint, provider=provider, region=region)
+    if not proposals:
+        console.print(
+            "[red]Solver returned no feasible proposals.[/red] "
+            "Try relaxing --budget or check that hints have valid alternatives."
+        )
+        raise typer.Exit(1)
+
+    if output == "json":
+        import json as _json
+        from dataclasses import asdict
+        console.print_json(_json.dumps([asdict(p) for p in proposals]))
+        raise typer.Exit(0)
+
+    for p in proposals:
+        if output == "markdown":
+            console.print(render_markdown(p))
+        else:
+            console.print(render_text(p))
+        console.print("─" * 60)
+
+
+@app.command()
 def explain(
     thread_id: Optional[str] = typer.Argument(None, help="Thread ID from a persisted run; omit to read the most recent."),
     output: str = typer.Option("markdown", "--output", "-o", help="Output format: markdown | text"),
