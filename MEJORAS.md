@@ -9,8 +9,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 > **Estado de avance** (rama `feature/improvements-foundation`)
 >
-> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §13 · §17.1.
-> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.3 · §3.4 · §3.5 · §7.1.
+> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §7.1 · §13 · §17.1.
+> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.3 · §3.4 · §3.5.
 
 ---
 
@@ -199,7 +199,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 ## 7. Seguridad operacional
 
-### 7.1 ⏳ 🔥 Credenciales: nunca en disco
+### 7.1 ✅ 🔥 Credenciales: nunca en disco
+- **Entregado:** `credentials/store.py` con `keyring` (macOS Keychain / Linux secret-service / Windows Credential Manager). API `save_credential` / `load_credential` / `delete_credential` / `list_credentials`. Scoped por `(service, provider)` para evitar colisiones entre cuentas. Hydration automática en startup CLI (`_root_callback`) — keychain → `os.environ` solo si la clave no está ya definida. Comandos `aetherdeploy creds set|list|delete`. Opt-out con `AETHER_CREDS_NO_HYDRATE=1`. *Falta:* auditoría de cualquier flujo que aún escriba a `.env` del proyecto (hoy no veo ninguno, queda como tarea de hardening defensivo).
 - `cli_credentials.py` debe escribir solo a:
   - macOS Keychain (`security` CLI o `keyring` lib),
   - Linux secret-service (`keyring`),
@@ -220,7 +221,7 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 | Sprint | Foco | Entregables | Estado |
 |--------|------|-------------|--------|
 | **S1 (2 sem)** | Estado y pipeline | 1.1 backend remoto · 1.2 checkpoint sqlite · 2.1 build/push imagen · 2.4 health checks | ✅ completo |
-| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | parcial — 3.1 ✅ · 3.2 ✅ · 3.3, 7.1 pendientes |
+| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | parcial — 3.1 ✅ · 3.2 ✅ · 7.1 ✅ · 3.3 pendiente |
 | **S3 (2 sem)** | Robustez | 2.2 migraciones · 2.3 rollback · 3.4 preflight cuotas · 2.5 destroy en grafo | parcial — 2.2 ✅ · resto pendiente |
 | **S4 (2 sem)** | Paridad cloud | 4.1 GCP/Azure tiers + catálogo · 4.3 CI/CD generado | ⏳ pendiente |
 | **S5 (2 sem)** | Refactor + tests | 5.1 split monolitos · 5.2 state tipado · 5.3 cobertura 70 % | ⏳ pendiente |

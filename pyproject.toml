@@ -20,6 +20,7 @@ dependencies = [
     "pyyaml>=6.0",
     "docker>=7.0",
     "ortools>=9.10",
+    "keyring>=25.0",
 ]
 
 [project.optional-dependencies]

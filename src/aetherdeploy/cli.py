@@ -25,6 +25,13 @@ from .cli_credentials import (
     validate_provider_credentials as _validate_provider_credentials,
     validate_required_credentials as _validate_required_credentials,
 )
+from .credentials import (
+    delete_credential as _delete_credential,
+    hydrate_environment as _hydrate_environment,
+    is_keyring_available as _is_keyring_available,
+    list_credentials as _list_credentials,
+    save_credential as _save_credential,
+)
 from .cli_nlu import (
     detect_explicit_action as _detect_explicit_action,
     detect_intent as _detect_intent,
@@ -42,8 +49,75 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 
+
+@app.callback()
+def _root_callback() -> None:
+    """Runs before every command.
+
+    Pulls allow-listed credentials from the OS keychain into ``os.environ`` so
+    the agent picks them up without exposing values on the command line or
+    persisting to ``.env``. See MEJORAS.md §7.1.
+    """
+    try:
+        _hydrate_environment()
+    except Exception:  # noqa: BLE001 — hydration is best-effort; never block the CLI
+        pass
+
+
 console = Console()
 renderer = Renderer()
+
+
+# ---------------------------------------------------------------------------
+# Credentials sub-app (MEJORAS.md §7.1) — manages keyring-backed secrets
+# ---------------------------------------------------------------------------
+
+creds_app = typer.Typer(help="Manage cloud credentials stored in the OS keychain.")
+app.add_typer(creds_app, name="creds")
+
+
+@creds_app.command("set")
+def creds_set(
+    key: str = typer.Argument(..., help="Credential key, e.g. AWS_ACCESS_KEY_ID"),
+    value: str = typer.Option(..., "--value", "-v", help="Credential value (use stdin or interactive prompt instead for secrets)", prompt=True, hide_input=True),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Optional provider scope (aws/gcp/azure)"),
+):
+    """Store a credential in the OS keychain (Keychain / Secret Service / Credential Manager)."""
+    if not _is_keyring_available():
+        console.print("[red]No usable keyring backend on this system.[/red]")
+        raise typer.Exit(code=2)
+    try:
+        _save_credential(key, value, provider=provider)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[red]Failed to store credential: {exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(f"[green]Stored {key}{(' (' + provider + ')') if provider else ''} in OS keychain.[/green]")
+
+
+@creds_app.command("list")
+def creds_list(
+    provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Optional provider scope"),
+):
+    """Show which credentials are present (values are never displayed)."""
+    if not _is_keyring_available():
+        console.print("[yellow]No usable keyring backend — nothing to list.[/yellow]")
+        raise typer.Exit(code=0)
+    presence = _list_credentials(provider=provider)
+    for key, stored in sorted(presence.items()):
+        mark = "✓" if stored else "—"
+        console.print(f"  {mark} {key}")
+
+
+@creds_app.command("delete")
+def creds_delete(
+    key: str = typer.Argument(...),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p"),
+):
+    """Remove a credential from the OS keychain."""
+    if _delete_credential(key, provider=provider):
+        console.print(f"[green]Removed {key} from keychain.[/green]")
+    else:
+        console.print(f"[yellow]No stored value for {key}.[/yellow]")
 
 
 # ---------------------------------------------------------------------------
