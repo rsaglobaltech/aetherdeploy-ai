@@ -6,6 +6,7 @@ from .generation import generation_node
 from .policy import policy_node
 from .build import build_node
 from .execution import execution_node
+from .migration import migration_node
 from .promotion import promotion_node
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "policy_node",
     "build_node",
     "execution_node",
+    "migration_node",
     "promotion_node",
 ]

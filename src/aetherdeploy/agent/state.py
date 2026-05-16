@@ -51,6 +51,11 @@ class AetherState(TypedDict, total=False):
     # Bootstrap del backend remoto Terraform (MEJORAS.md §1.1) — por entorno
     state_backends: dict[str, dict]
 
+    # Resultado de migraciones DB (MEJORAS.md §2.2) — por entorno
+    migration_results: dict[str, dict]
+    # Targets de ECS para correr las migraciones — opcional; lo provee la CLI
+    migration_targets: dict[str, dict]
+
     # Ejecución
     deployment_result: DeploymentResult | None
 

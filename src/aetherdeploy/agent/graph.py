@@ -55,6 +55,7 @@ from .nodes import (
     discovery_node,
     execution_node,
     generation_node,
+    migration_node,
     policy_node,
     promotion_node,
     proposal_node,
@@ -97,13 +98,23 @@ def _route_after_build(state: AetherState) -> Literal["execution", "__end__"]:
     return "execution"
 
 
-def _route_after_execution(state: AetherState) -> Literal["promotion", "__end__"]:
-    """Route to promotion after a successful feature-env deploy; otherwise finish."""
+def _route_after_execution(state: AetherState) -> Literal["migration", "__end__"]:
+    """After execution, run migrations (when deploy succeeded). Plan/destroy bypass."""
     action = state.get("requested_action")
     if action in ("plan", "destroy"):
         return "__end__"
     result = state.get("deployment_result")
+    if result is None or not result.success:
+        return "__end__"
+    return "migration"
+
+
+def _route_after_migration(state: AetherState) -> Literal["promotion", "__end__"]:
+    """Promotion only fires for successful feature deploys with successful migrations."""
+    if state.get("current_step") == "migrations_error":
+        return "__end__"
     envs = state.get("target_environments") or []
+    result = state.get("deployment_result")
     if "feature" in envs and result and result.success:
         return "promotion"
     return "__end__"
@@ -171,6 +182,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("policy", traced_node(policy_node))
     builder.add_node("build", traced_node(build_node))
     builder.add_node("execution", traced_node(execution_node))
+    builder.add_node("migration", traced_node(migration_node))
     builder.add_node("promotion", traced_node(promotion_node))
 
     builder.set_entry_point("discovery")
@@ -208,6 +220,11 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_conditional_edges(
         "execution",
         _route_after_execution,
+        {"migration": "migration", "__end__": END},
+    )
+    builder.add_conditional_edges(
+        "migration",
+        _route_after_migration,
         {"promotion": "promotion", "__end__": END},
     )
 
