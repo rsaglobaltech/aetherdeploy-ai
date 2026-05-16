@@ -51,6 +51,9 @@ class AetherState(TypedDict, total=False):
     # Estimación de coste Infracost (MEJORAS.md §3.1) — por entorno
     cost_results: dict[str, dict]
 
+    # Secrets de aplicación detectados + IaC generado (MEJORAS.md §3.3)
+    secrets_results: dict[str, dict]
+
     # Bootstrap del backend remoto Terraform (MEJORAS.md §1.1) — por entorno
     state_backends: dict[str, dict]
 

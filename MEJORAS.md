@@ -9,8 +9,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 > **Estado de avance** (rama `feature/improvements-foundation`)
 >
-> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §7.1 · §13 · §17.1.
-> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.3 · §3.4 · §3.5.
+> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §3.3 · §7.1 · §13 · §17.1.
+> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.4 · §3.5.
 
 ---
 
@@ -94,7 +94,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
   - Permitir overrides explícitos: `--allow-policy CKV_AWS_18` con justificación que se logea.
 - **Entregado:** `policy/checker.py` envuelve Checkov + tfsec, normaliza findings (rule_id, severity, file:line, resource). Hard-fail rules embebidas (S3 público, RDS unencrypted, IAM `*:*`, SG `0.0.0.0/0`, equivalentes GCP/Azure). `policy_node` entre `generation` y `build`. Override via `AETHER_ALLOW_POLICY=CKV_AWS_18,...`. *Falta:* OPA/Rego, validación interactiva con justificación tipeada.
 
-### 3.3 ⏳ ⚡ Secrets management
+### 3.3 ✅ ⚡ Secrets management
+- **Entregado:** `secrets/detector.py` con regex robusto + allowlist de falsos positivos (parsea `.env.example`, `.env.template`, Spring `application.properties.example`). `secrets/generator.py` emite `secrets.tf` con `aws_secretsmanager_secret` + output con ARNs por clave. `secrets/provisioner.py` escribe valores via `boto3 put_secret_value` cuando `AETHER_SECRET_VALUE_<KEY>` está definido. Nodo `secrets_node` entre `generation` y `policy`. Feature env nunca contacta Secrets Manager (LocalStack). Opt-out con `AETHER_SECRETS_DISABLED=1`. *Falta:* GCP Secret Manager, Azure Key Vault, prompt interactivo desde TUI para capturar valores sin pasarlos por env vars.
 - **Hoy:** `.env` y credenciales locales. No hay flujo para inyectar secrets de la app a producción.
 - **Acción:**
   - Detectar usos de secrets (heurística: keys con `_KEY`/`_SECRET`/`_TOKEN` en `.env.example`).
@@ -221,7 +222,7 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 | Sprint | Foco | Entregables | Estado |
 |--------|------|-------------|--------|
 | **S1 (2 sem)** | Estado y pipeline | 1.1 backend remoto · 1.2 checkpoint sqlite · 2.1 build/push imagen · 2.4 health checks | ✅ completo |
-| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | parcial — 3.1 ✅ · 3.2 ✅ · 7.1 ✅ · 3.3 pendiente |
+| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | ✅ completo |
 | **S3 (2 sem)** | Robustez | 2.2 migraciones · 2.3 rollback · 3.4 preflight cuotas · 2.5 destroy en grafo | parcial — 2.2 ✅ · resto pendiente |
 | **S4 (2 sem)** | Paridad cloud | 4.1 GCP/Azure tiers + catálogo · 4.3 CI/CD generado | ⏳ pendiente |
 | **S5 (2 sem)** | Refactor + tests | 5.1 split monolitos · 5.2 state tipado · 5.3 cobertura 70 % | ⏳ pendiente |

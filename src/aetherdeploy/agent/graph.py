@@ -60,6 +60,7 @@ from .nodes import (
     policy_node,
     promotion_node,
     proposal_node,
+    secrets_node,
 )
 from .state import AetherState
 
@@ -187,6 +188,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("proposal", traced_node(proposal_node))
     builder.add_node("confirmation", traced_node(confirmation_node))
     builder.add_node("generation", traced_node(generation_node))
+    builder.add_node("secrets", traced_node(secrets_node))
     builder.add_node("policy", traced_node(policy_node))
     builder.add_node("cost", traced_node(cost_node))
     builder.add_node("build", traced_node(build_node))
@@ -214,7 +216,8 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
         {"generation": "generation", "proposal": "proposal", "__end__": END},
     )
 
-    builder.add_edge("generation", "policy")
+    builder.add_edge("generation", "secrets")
+    builder.add_edge("secrets", "policy")
     builder.add_conditional_edges(
         "policy",
         _route_after_policy,
