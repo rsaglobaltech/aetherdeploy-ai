@@ -9,8 +9,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 > **Estado de avance** (rama `feature/improvements-foundation`)
 >
-> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.2 · §13 · §17.1.
-> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.1 · §3.3 · §3.4 · §3.5 · §7.1.
+> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §13 · §17.1.
+> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.3 · §3.4 · §3.5 · §7.1.
 
 ---
 
@@ -78,7 +78,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 ## 3. Coste, seguridad y compliance
 
-### 3.1 ⏳ 🎯 Estimación de coste real (Infracost)
+### 3.1 ✅ 🎯 Estimación de coste real (Infracost)
+- **Entregado:** `cost/infracost.py` envuelve `infracost breakdown --format json`, parsea modules + subresources, devuelve `CostReport` con totales y top-N. `cost_node` entre `policy` y `build`. Gate por `AETHER_COST_BUDGET_USD` con override por entorno (`AETHER_COST_BUDGET_USD_<ENV>`). Soft-skip si binario no instalado. *Falta:* delta vs propuesta anterior, integración en TUI.
 - **Hoy:** `total_estimated_cost = "~$35-85/mes"` viene de rangos estáticos en `providers/aws/services.py`.
 - **Acción:**
   - Integrar [Infracost](https://www.infracost.io/) (CLI gratis). Tras generar Terraform y antes del HIL, correr `infracost breakdown --path tf/ --format json`.
@@ -219,7 +220,7 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 | Sprint | Foco | Entregables | Estado |
 |--------|------|-------------|--------|
 | **S1 (2 sem)** | Estado y pipeline | 1.1 backend remoto · 1.2 checkpoint sqlite · 2.1 build/push imagen · 2.4 health checks | ✅ completo |
-| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | parcial — 3.2 ✅ · resto pendiente |
+| **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | parcial — 3.1 ✅ · 3.2 ✅ · 3.3, 7.1 pendientes |
 | **S3 (2 sem)** | Robustez | 2.2 migraciones · 2.3 rollback · 3.4 preflight cuotas · 2.5 destroy en grafo | parcial — 2.2 ✅ · resto pendiente |
 | **S4 (2 sem)** | Paridad cloud | 4.1 GCP/Azure tiers + catálogo · 4.3 CI/CD generado | ⏳ pendiente |
 | **S5 (2 sem)** | Refactor + tests | 5.1 split monolitos · 5.2 state tipado · 5.3 cobertura 70 % | ⏳ pendiente |

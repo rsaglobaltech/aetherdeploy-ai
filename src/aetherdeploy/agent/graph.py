@@ -52,6 +52,7 @@ from .nodes import (
     analysis_node,
     build_node,
     confirmation_node,
+    cost_node,
     discovery_node,
     execution_node,
     generation_node,
@@ -84,9 +85,16 @@ def _route_after_confirmation(state: AetherState) -> Literal["generation", "prop
     return "__end__"
 
 
-def _route_after_policy(state: AetherState) -> Literal["build", "__end__"]:
+def _route_after_policy(state: AetherState) -> Literal["cost", "__end__"]:
     """Stop the pipeline when the policy gate blocked the deploy."""
     if state.get("current_step") == "policy_error":
+        return "__end__"
+    return "cost"
+
+
+def _route_after_cost(state: AetherState) -> Literal["build", "__end__"]:
+    """Stop the pipeline when the cost gate blocked the deploy."""
+    if state.get("current_step") == "cost_error":
         return "__end__"
     return "build"
 
@@ -180,6 +188,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("confirmation", traced_node(confirmation_node))
     builder.add_node("generation", traced_node(generation_node))
     builder.add_node("policy", traced_node(policy_node))
+    builder.add_node("cost", traced_node(cost_node))
     builder.add_node("build", traced_node(build_node))
     builder.add_node("execution", traced_node(execution_node))
     builder.add_node("migration", traced_node(migration_node))
@@ -209,6 +218,11 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_conditional_edges(
         "policy",
         _route_after_policy,
+        {"cost": "cost", "__end__": END},
+    )
+    builder.add_conditional_edges(
+        "cost",
+        _route_after_cost,
         {"build": "build", "__end__": END},
     )
     builder.add_conditional_edges(
