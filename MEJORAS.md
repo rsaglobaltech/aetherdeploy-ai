@@ -9,8 +9,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 
 > **Estado de avance** (rama `feature/improvements-foundation`)
 >
-> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §3.3 · §7.1 · §13 · §17.1.
-> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.4 · §3.5.
+> Entregado: §1.1 · §1.2 · §2.1 · §2.2 · §2.4 · §3.1 · §3.2 · §3.3 · §3.4 · §7.1 · §13 · §17.1.
+> Pendiente prioritario: §1.3 · §2.3 · §2.5 · §3.5.
 
 ---
 
@@ -102,7 +102,8 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
   - Generar recursos `aws_secretsmanager_secret` / `google_secret_manager_secret` / `azurerm_key_vault_secret`.
   - Prompt interactivo: "Detected 3 secrets: DATABASE_URL, JWT_SECRET, STRIPE_KEY. Provide values now or skip?" — escribe directo al manager, nunca al state.
 
-### 3.4 ⏳ ⚡ Pre-flight de cuotas y permisos
+### 3.4 ✅ ⚡ Pre-flight de cuotas y permisos
+- **Entregado:** `preflight/quotas.py` consulta `service-quotas:GetServiceQuota` para Lambda concurrency, Fargate vCPU, RDS DB instances, EC2 vCPUs (mapeado desde `terraform_resource`). Comparte cuota suma requeridos. `preflight/iam.py` corre `iam:SimulatePrincipalPolicy` contra la identidad STS actual con el set de acciones derivado de la propuesta (CreateFunction, CreateService, CreateDBInstance, PassRole, etc). `preflight_node` entre `cost` y `build` — bloquea en cuota agotada o IAM `denied`. *Falta:* equivalentes GCP (`compute project-info`) y Azure (`vm list-usage`).
 - Llamar `aws service-quotas get-service-quota` / `gcloud compute project-info` / `az vm list-usage` antes del apply.
 - Verificar IAM efectivo con `aws iam simulate-principal-policy` para los recursos que se van a crear. Falla rápida con mensaje claro ("falta `lambda:CreateFunction` en role X") en lugar de error críptico de Terraform a los 4 minutos.
 
@@ -223,7 +224,7 @@ Leyenda: 🔥 = bloqueante para producción · ⚡ = alto impacto · 🧩 = mejo
 |--------|------|-------------|--------|
 | **S1 (2 sem)** | Estado y pipeline | 1.1 backend remoto · 1.2 checkpoint sqlite · 2.1 build/push imagen · 2.4 health checks | ✅ completo |
 | **S2 (2 sem)** | Seguridad y coste | 3.1 Infracost · 3.2 policy gates · 3.3 secrets · 7.1 keyring | ✅ completo |
-| **S3 (2 sem)** | Robustez | 2.2 migraciones · 2.3 rollback · 3.4 preflight cuotas · 2.5 destroy en grafo | parcial — 2.2 ✅ · resto pendiente |
+| **S3 (2 sem)** | Robustez | 2.2 migraciones · 2.3 rollback · 3.4 preflight cuotas · 2.5 destroy en grafo | parcial — 2.2 ✅ · 3.4 ✅ · 2.3, 2.5 pendientes |
 | **S4 (2 sem)** | Paridad cloud | 4.1 GCP/Azure tiers + catálogo · 4.3 CI/CD generado | ⏳ pendiente |
 | **S5 (2 sem)** | Refactor + tests | 5.1 split monolitos · 5.2 state tipado · 5.3 cobertura 70 % | ⏳ pendiente |
 | **S6 (2 sem)** | Diferenciadores | 3.5 drift detection · 4.6 dashboards obs · 6.5 modo chat persistente | ⏳ pendiente |

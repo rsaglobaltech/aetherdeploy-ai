@@ -54,6 +54,9 @@ class AetherState(TypedDict, total=False):
     # Secrets de aplicación detectados + IaC generado (MEJORAS.md §3.3)
     secrets_results: dict[str, dict]
 
+    # Pre-flight quotas + IAM (MEJORAS.md §3.4)
+    preflight_results: dict[str, dict]
+
     # Bootstrap del backend remoto Terraform (MEJORAS.md §1.1) — por entorno
     state_backends: dict[str, dict]
 

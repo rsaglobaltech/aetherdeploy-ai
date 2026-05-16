@@ -58,6 +58,7 @@ from .nodes import (
     generation_node,
     migration_node,
     policy_node,
+    preflight_node,
     promotion_node,
     proposal_node,
     secrets_node,
@@ -93,9 +94,16 @@ def _route_after_policy(state: AetherState) -> Literal["cost", "__end__"]:
     return "cost"
 
 
-def _route_after_cost(state: AetherState) -> Literal["build", "__end__"]:
+def _route_after_cost(state: AetherState) -> Literal["preflight", "__end__"]:
     """Stop the pipeline when the cost gate blocked the deploy."""
     if state.get("current_step") == "cost_error":
+        return "__end__"
+    return "preflight"
+
+
+def _route_after_preflight(state: AetherState) -> Literal["build", "__end__"]:
+    """Stop when quotas / IAM block the deploy."""
+    if state.get("current_step") == "preflight_error":
         return "__end__"
     return "build"
 
@@ -191,6 +199,7 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_node("secrets", traced_node(secrets_node))
     builder.add_node("policy", traced_node(policy_node))
     builder.add_node("cost", traced_node(cost_node))
+    builder.add_node("preflight", traced_node(preflight_node))
     builder.add_node("build", traced_node(build_node))
     builder.add_node("execution", traced_node(execution_node))
     builder.add_node("migration", traced_node(migration_node))
@@ -226,6 +235,11 @@ def build_graph(checkpointer: "BaseCheckpointSaver | None" = None):
     builder.add_conditional_edges(
         "cost",
         _route_after_cost,
+        {"preflight": "preflight", "__end__": END},
+    )
+    builder.add_conditional_edges(
+        "preflight",
+        _route_after_preflight,
         {"build": "build", "__end__": END},
     )
     builder.add_conditional_edges(
